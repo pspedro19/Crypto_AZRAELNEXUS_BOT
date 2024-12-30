@@ -1,0 +1,344 @@
+version: '3.7'
+
+x-airflow-common: &airflow-common
+  build: './airflow'
+  image: ${AIRFLOW_IMAGE_NAME:-extending_airflow:latest}
+  environment: &airflow-common-env
+    PYTHONPATH: "/home/airflow/.local/lib/python3.8/site-packages:/opt/airflow"
+    AIRFLOW_HOME: "/opt/airflow"
+    PATH: "/home/airflow/.local/bin:${PATH}"
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY:-tEfCEsmDia_9y6UZwGy-PzmMrYWaS4dcSeFDVpzHsoo=}'
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    AIRFLOW__WEBSERVER__BASE_URL: 'http://localhost:8080'
+    AIRFLOW__WEBSERVER__WEB_SERVER_HOST: '0.0.0.0'
+    AIRFLOW__WEBSERVER__WEB_SERVER_PORT: '8080'
+    AIRFLOW__WEBSERVER__SECRET_KEY: '${AIRFLOW_SECRET_KEY:-tEfCEsmDia_9y6UZwGy-PzmMrYWaS4dcSeFDVpzHsoo=}'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'True'
+    AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: 'True'
+    AIRFLOW__WEBSERVER__WORKERS: '4'
+    AIRFLOW__WEBSERVER__ACCESS_CONTROL_ALLOW_ORIGINS: '*'
+    AIRFLOW__WEBSERVER__COOKIE_SECURE: 'False'
+    AIRFLOW__CORE__STORE_DAG_CODE: 'True'
+    AIRFLOW__CORE__STORE_SERIALIZED_DAGS: 'True'
+    AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL: '30'
+    AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: '600'
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: '30'
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: '30'
+    AIRFLOW__SCHEDULER__SCHEDULER_HEALTH_CHECK_THRESHOLD: '30'
+    AIRFLOW__LOGGING__BASE_LOG_FOLDER: '/opt/airflow/logs'
+    AIRFLOW__LOGGING__DAG_PROCESSOR_MANAGER_LOG_LOCATION: '/opt/airflow/logs/dag_processor_manager/dag_processor_manager.log'
+    AIRFLOW__LOGGING__LOGGING_LEVEL: 'INFO'
+    AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minio}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:-minio123}
+    AWS_ENDPOINT_URL_S3: http://minio:${MINIO_PORT:-9000}
+    MLFLOW_S3_ENDPOINT_URL: http://minio:${MINIO_PORT:-9000}
+    MONGO_SECONDARY_IP: ${MONGO_SECONDARY_IP}
+    MONGO_PORT: ${MONGO_PORT:-27017}
+    MONGO_DATABASE: ${MONGO_DATABASE:-facsat2}
+    MONGO_PRIMARY_IP: ${MONGO_PRIMARY_IP}
+    REPLICA_SET: ${REPLICA_SET}
+    MONGO_HOST: ${MONGO_HOST}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags:z
+    - ./airflow/logs:/opt/airflow/logs:z
+    - ./airflow/plugins:/opt/airflow/plugins:z
+    - ./airflow/config:/opt/airflow/config:z
+    - ./airflow/secrets:/opt/airflow/secrets:z
+    - type: tmpfs
+      target: /tmp/airflow
+    - ./minio/data:/opt/minio/data:rw
+  networks:
+    - frontend
+    - backend
+    - mongo-network
+  user: "${AIRFLOW_UID:-50000}:0"
+
+services:
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-airflow}
+      POSTGRES_DB: ${DB_NAME:-airflow}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/pgdata
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+      timeout: 5s
+
+  airflow-init-directories:
+      <<: *airflow-common
+      container_name: airflow_init_directories
+      entrypoint: /bin/bash
+      command: |
+        -c 'mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins &&
+            chown -R "${AIRFLOW_UID}:0" /opt/airflow'
+      user: "0:0"
+      depends_on:
+        postgres:
+          condition: service_healthy
+
+
+  init-permissions:
+      image: busybox
+      command: >
+        sh -c "chown -R 50000:0 /opt/minio/data && chmod -R 775 /opt/minio/data"
+      volumes:
+        - ./minio/data:/opt/minio/data
+      user: "0:0"  
+
+
+  mongo-secondary:
+    image: mongo:5.0
+    container_name: mongo-secondary
+    hostname: mongo-secondary
+    restart: unless-stopped
+    command: mongod --bind_ip_all --port 27017 --replSet rs0
+    ports:
+      - "27017:27017"
+    environment:
+      - TZ=UTC
+      - MONGO_PRIMARY_IP=${MONGO_PRIMARY_IP}
+      - MONGO_SECONDARY_IP=${MONGO_SECONDARY_IP}
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - mongo-network
+    healthcheck:
+      test: mongosh --eval "db.adminCommand('ping')"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  mongo-init:
+    image: mongo:5.0
+    container_name: mongo-init
+    restart: "no"
+    depends_on:
+      mongo-secondary:
+        condition: service_healthy
+    volumes:
+      - ./init-mongodb:/scripts
+    entrypoint: ["bash", "/scripts/init-secondary.sh"]
+    networks:
+      - mongo-network
+
+
+  minio:
+    restart: always
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_ACCESS_KEY:-minio123}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_PORT_UI:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address :9001
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+  create_s3_buckets:
+    image: minio/mc:latest
+    container_name: minio_create_bucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - backend
+    entrypoint: >
+      /bin/sh -c '
+      sleep 5;
+      /usr/bin/mc config host add s3 http://minio:${MINIO_PORT:-9000} ${MINIO_ACCESS_KEY:-minio} ${MINIO_SECRET_ACCESS_KEY:-minio123} --api S3v4;
+      /usr/bin/mc mb s3/${MLFLOW_BUCKET_NAME:-mlflow};
+      /usr/bin/mc policy set download s3/${MLFLOW_BUCKET_NAME:-mlflow};
+      /usr/bin/mc mb s3/${DATA_REPO_BUCKET_NAME:-data};
+      /usr/bin/mc policy set download s3/${DATA_REPO_BUCKET_NAME:-data};
+      /usr/bin/mc mb s3/preprocess;
+      /usr/bin/mc policy set download s3/preprocess;
+      exit 0;
+      '
+
+  mlflow:
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    container_name: mlflow_tracking
+    restart: always
+    user: root
+    environment:
+      BACKEND_STORE_URI: sqlite:////mlflow/mlflow.db
+      MLFLOW_S3_ENDPOINT_URL: http://minio:${MINIO_PORT:-9000}
+      AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minio}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY:-minio123}
+      MLFLOW_TRACKING_URI: http://0.0.0.0:${MLFLOW_PORT:-5000}
+      MLFLOW_S3_IGNORE_TLS: 'true'
+      MLFLOW_BUCKET_NAME: ${MLFLOW_BUCKET_NAME:-mlflow}
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://${MLFLOW_BUCKET_NAME:-mlflow}/
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    networks:
+      - backend
+    depends_on:
+      minio:
+        condition: service_healthy
+      create_s3_buckets:
+        condition: service_completed_successfully
+    healthcheck:
+      test: curl --fail http://localhost:${MLFLOW_PORT:-5000}/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  fastapi:
+      build:
+        context: ./app
+        dockerfile: Dockerfile
+      container_name: fastapi_server
+      restart: always
+      env_file:
+        - .env
+      environment:
+        MLFLOW_TRACKING_URI: http://mlflow:${MLFLOW_PORT:-5000}
+        HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN}
+        MINIO_URL: minio:${MINIO_PORT:-9000}
+        MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
+        MINIO_SECRET_KEY: ${MINIO_SECRET_ACCESS_KEY:-minio123}
+        OPENAI_API_KEY: ${OPENAI_API_KEY}
+        MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://${MLFLOW_BUCKET_NAME:-mlflow}/
+      volumes:
+        - ./data:/data
+        - ./app:/app
+      ports:
+        - "${FASTAPI_PORT:-8000}:8000"
+      networks:
+        - backend
+      depends_on:
+        mlflow:
+          condition: service_healthy
+      command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    command: webserver
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-init-directories:
+        condition: service_completed_successfully
+      init-permissions:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-init-directories:
+        condition: service_completed_successfully
+      init-permissions:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    entrypoint: /entrypoint.sh
+    command: init
+    user: "0:0"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:rw
+      - ./airflow/logs:/opt/airflow/logs:rw
+      - ./airflow/plugins:/opt/airflow/plugins:rw
+      - ./airflow/config:/opt/airflow/config:rw
+      - ./airflow/secrets:/opt/airflow/secrets:rw
+      - ./minio/data:/opt/minio/data:rw 
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  mongo-network:
+    name: mongo-network
+    driver: bridge
+  backend:
+    name: backend
+    driver: bridge
+  frontend:
+    name: frontend
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: postgres_data
+  mongodb_secondary_data:
+    name: mongodb_secondary_data
+  minio_data:
+    name: minio_data
+  mongodb_data:
+    name: mongodb_data
+  mlflow_data:
+    name: mlflow_data
+  mongodb_config:
+    name: mongodb_config

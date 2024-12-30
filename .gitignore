@@ -1,0 +1,53 @@
+# Ignorar entornos virtuales
+myenv/
+venv/
+env/
+.venv/
+venv*
+env*
+
+*.pyc
+__pycache__/
+airflow/logs/
+*/_pycache_/
+
+# Ignorar archivos de configuración de IDE
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Ignorar archivos de configuración del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Ignorar archivos de registro
+*.log
+
+# Ignorar archivos de bases de datos locales
+# *.sqlite3
+
+# Ignorar archivos de MinIO descargados localmente
+# *.pdf
+# *.txt
+# *.md
+
+# Ignorar archivos de salida
+*.csv
+# *.json
+
+# Ignorar archivos y carpetas temporales de Docker
+docker-compose.override.yml
+docker-compose.override.yml.tmp
+
+# Ignorar el directorio de Airflow logs
+# airflow/logs/
+
+# Ignorar el directorio de datos
+# data/*.json
+
+# Ignorar ficheros de configuración específicos del usuario
+#.env
+airflow/airflow.db
+data/
+*.zip

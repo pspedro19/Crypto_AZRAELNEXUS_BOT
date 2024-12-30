@@ -1,0 +1,5 @@
+numpy
+requests
+scikit-learn
+pandas
+regex

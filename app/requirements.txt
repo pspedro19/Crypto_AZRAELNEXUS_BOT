@@ -1,0 +1,5 @@
+fastapi
+scikit-learn
+minio
+pandas
+uvicorn[standard]
