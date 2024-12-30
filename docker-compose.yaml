@@ -318,6 +318,25 @@ services:
       postgres:
         condition: service_healthy
 
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 networks:
   mongo-network:
     name: mongo-network
@@ -342,3 +361,5 @@ volumes:
     name: mlflow_data
   mongodb_config:
     name: mongodb_config
+  grafana_data:
+    name: grafana_data
