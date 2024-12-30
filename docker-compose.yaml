@@ -349,6 +349,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
     ports:
       - "5050:80"   # Expone el puerto 80 del contenedor en el 5050 del host
     networks:
@@ -382,3 +384,5 @@ volumes:
     name: mongodb_config
   grafana_data:
     name: grafana_data
+  pgadmin_data:
+    name: pgadmin_data
