@@ -1,114 +1,281 @@
 # CRYPTO AZRAEL NEXUS BOT 🤖
 
-![Azrael Nexus](https://via.placeholder.com/800x200?text=AZRAEL+NEXUS+BOT)
+## System Architecture Overview
 
-## Descripción
-AZRAEL NEXUS es un bot de trading algorítmico avanzado diseñado para operar en el mercado de criptomonedas, específicamente en Binance. Utiliza una combinación de aprendizaje automático, análisis técnico y gestión de riesgos adaptativa para identificar y ejecutar operaciones de trading.
+### Distributed Architecture
+The system operates across two main server environments:
 
-## Características Principales 🚀
+#### Linux Server (Primary)
+- Hosts the core real-time data processing infrastructure
+- Manages database and message broker systems
+- Handles API and visualization services
+- Coordinates all distributed services
 
-### Análisis de Mercado
-- Análisis en tiempo real de patrones de mercado.
-- Detección de estados de mercado mediante HMM (Hidden Markov Models).
-- Indicadores técnicos avanzados y análisis de volatilidad.
-- Identificación de niveles de soporte y resistencia.
+#### Windows Server (Secondary)
+- Dedicated to MyInvestor data scraping
+- Runs scheduled scraping tasks at 2 AM daily
+- Communicates with main system via API Gateway
 
-### Sistema de Trading
-- Trading spot automatizado.
-- Gestión dinámica de posiciones.
-- Sistema de stop-loss adaptativo.
-- Toma de beneficios basada en análisis de mercado.
+### Real-time Data Infrastructure
 
-### Visualización de Datos 📊
-- Dashboard interactivo en tiempo real.
-- Gráficos de precio y estados del mercado.
-- Métricas de rendimiento y estadísticas.
-- Panel de alertas y señales.
+#### Kafka Message System
+```
+Kafka Infrastructure:
+├── Zookeeper (Management)
+│   ├── Port: 2181
+│   └── Configuration: ./kafka_services/zookeeper/
+├── Kafka Broker
+│   ├── Port: 9092 (internal), 29092 (external)
+│   └── Topics:
+│       ├── crypto-prices (market data)
+│       ├── crypto-events (system events)
+│       └── crypto-alerts (monitoring)
+├── Kafka Producer Services
+│   ├── Binance WebSocket Producer
+│   │   └── 15-minute interval data
+│   └── CoinGecko API Producer
+│       └── Market data updates
+└── Kafka Consumer Services
+    ├── Database Writer
+    ├── Alert Manager
+    └── Metrics Collector
+```
 
-### Gestión de Riesgos 🛡️
-- Control dinámico del tamaño de posiciones.
-- Sistema de gestión de drawdown.
-- Análisis de correlación y exposición.
-- Protección contra condiciones anómalas de mercado.
+#### Data Flow
+1. **Data Ingestion**
+   - Binance WebSocket streams (real-time)
+   - CoinGecko API calls (15-min intervals)
+   - MyInvestor scraping (daily at 2 AM)
 
-## Estructura del Proyecto 📂
-```plaintext
-.
-├── .dockerignore
-├── .env
-├── .git
-├── .gitignore
-├── .venv
-├── README.md
-├── airflow/
-│   ├── Dockerfile
-│   ├── airflow.cfg
-│   ├── dags/
-│   ├── entrypoint.sh
-│   ├── logs/
-│   ├── plugins/
-│   ├── requirements.txt
-│   ├── secrets/
-│   └── wait-for-it.sh
-├── app/
-│   ├── Dockerfile
-│   ├── main.py
-│   └── requirements.txt
-├── data/
-│   └── facsat2/
-├── docker-compose.yaml
-├── ejecucion.log
-├── facsat2.zip
-├── init-mongodb/
-│   ├── healthcheck.sh
-│   ├── init-replicaset.sh
-│   ├── init-secondary.sh
-│   └── init-standalone.sh
-├── minio/
-│   ├── Dockerfile
-│   └── data/
-├── mlflow/
-│   ├── Dockerfile
-│   ├── init_db.sh
-│   └── requirements.txt
-├── notebooks/
-│   ├── descriptivas_ParamData.ipynb
-│   ├── entendimiento_datos.ipynb
-│   ├── exploratory_data_analysis.ipynb
-│   ├── outputs/
-│   └── proceso_etl.ipynb
-└── requirements.txt
-## Instalación y Configuración 🛠️
+2. **Message Processing**
+   ```mermaid
+   graph LR
+   A[Data Sources] --> B[Kafka Producers]
+   B --> C[Kafka Broker]
+   C --> D[Consumers]
+   D --> E[PostgreSQL]
+   E --> F[Materialized Views]
+   ```
 
-### Requisitos del Sistema
-- **Python**: >= 3.8
-- **Docker**: >= 20.10
-- **Docker Compose**: >= 1.29
+3. **Storage Layer**
+   - PostgreSQL for structured data
+   - MinIO for object storage
+   - MongoDB for document storage
 
-### Pasos de Instalación
+### Database Architecture
 
-1. Clonar el repositorio:
+#### PostgreSQL Schema
+```sql
+-- Main Tables
+binance_data (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(20),
+    timestamp TIMESTAMP,
+    price NUMERIC(24,8),
+    volume NUMERIC(24,8)
+);
+
+coingecko_data (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(50),
+    timestamp TIMESTAMP,
+    market_data JSONB
+);
+
+myinvestor_data (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(50),
+    date DATE,
+    metrics JSONB
+);
+
+-- Materialized Views
+crypto_combined_data (
+    symbol VARCHAR(50),
+    latest_price NUMERIC(24,8),
+    volume_24h NUMERIC(24,8),
+    market_indicators JSONB
+);
+```
+
+### Service Integration
+
+#### Inter-service Communication
+```
+API Gateway (Nginx)
+├── FastAPI Service (:8000)
+│   └── Market Data API
+├── Grafana (:3000)
+│   └── Dashboards
+└── MLflow (:5000)
+    └── Model Tracking
+```
+
+## Deployment Guide
+
+### Linux Server Setup
+
+1. **System Requirements**
    ```bash
-   git clone https://github.com/yourusername/crypto_azraelnexus_bot.git
-   cd crypto_azraelnexus_bot
+   # Update system
+   apt-get update && apt-get upgrade
+   
+   # Install dependencies
+   apt-get install -y \
+       docker.io \
+       docker-compose \
+       python3.9 \
+       python3.9-venv \
+       postgresql-client
+   ```
 
-2. Crear un entorno virtual:
+2. **Docker Services**
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Linux/Mac
-   .venv\Scripts\activate     # Windows
+   # Start core services
+   docker-compose up -d postgres kafka zookeeper
+   
+   # Start data services
+   docker-compose up -d crypto-producer crypto-consumer
+   
+   # Start monitoring
+   docker-compose up -d grafana prometheus
+   ```
 
-3. Instalar dependencias:
+3. **Environment Configuration**
    ```bash
+   # Core services
+   KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+   POSTGRES_HOST=postgres
+   POSTGRES_DB=crypto_data
+   
+   # API Keys
+   BINANCE_API_KEY=your_key
+   BINANCE_API_SECRET=your_secret
+   COINGECKO_API_KEY=your_key
+   
+   # Monitoring
+   GRAFANA_ADMIN_PASSWORD=your_password
+   ```
+
+### Windows Server Setup
+
+1. **Prerequisites**
+   - Python 3.9+
+   - Windows Server 2019+
+   - NSSM (Non-Sucking Service Manager)
+
+2. **Service Installation**
+   ```powershell
+   # Install Python dependencies
+   python -m venv venv
+   .\venv\Scripts\activate
    pip install -r requirements.txt
+   
+   # Install Windows Service
+   nssm install MyInvestorScraper python.exe
+   nssm set MyInvestorScraper AppParameters "scraper.py"
+   nssm set MyInvestorScraper AppDirectory "C:\Services\MyInvestor"
+   ```
 
-4. Configurar variables de entorno:
+### Monitoring and Maintenance
+
+#### Health Checks
+```bash
+# Kafka health
+docker-compose exec kafka kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+# PostgreSQL health
+docker-compose exec postgres pg_isready
+
+# API health
+curl http://localhost:8000/health
+```
+
+#### Backup System
+```bash
+# Database backup
+0 0 * * * pg_dump crypto_data > /backups/db_$(date +\%Y\%m\%d).sql
+
+# Configuration backup
+0 0 * * * tar -czf /backups/config_$(date +\%Y\%m\%d).tar.gz /etc/crypto_bot/
+```
+
+#### Log Management
+```
+Logging Structure:
+├── /var/log/crypto_bot/
+│   ├── kafka/
+│   │   ├── producer.log
+│   │   └── consumer.log
+│   ├── api/
+│   │   └── api.log
+│   └── scraper/
+│       └── myinvestor.log
+```
+
+## Development Guidelines
+
+### Adding New Features
+
+1. **Kafka Topics**
    ```bash
-   cp .env.example .env
-   # Edita el archivo .env con las claves y configuraciones necesarias
+   # Create new topic
+   kafka-topics.sh --create \
+       --bootstrap-server kafka:9092 \
+       --topic new-feature-topic \
+       --partitions 3 \
+       --replication-factor 1
+   ```
 
-5. Construir servicios Docker:
-   ```bash
-   docker-compose up --build
+2. **Database Migrations**
+   ```sql
+   -- Create migration
+   CREATE MIGRATION add_new_feature (
+       -- Add new tables/columns
+       ALTER TABLE crypto_data
+       ADD COLUMN new_feature_column VARCHAR(50)
+   );
+   ```
 
+3. **API Endpoints**
+   ```python
+   @app.post("/api/v1/new-feature")
+   async def new_feature():
+       # Implementation
+       pass
+   ```
 
+### Testing Pipeline
+```bash
+# Unit tests
+pytest tests/unit
+
+# Integration tests
+pytest tests/integration
+
+# Performance tests
+locust -f tests/performance/locustfile.py
+```
+
+## Security Considerations
+
+### Network Security
+- Internal network isolation
+- API Gateway with rate limiting
+- SSL/TLS encryption for all services
+
+### Data Security
+- Encrypted credentials
+- Regular security audits
+- Access control lists
+
+### Monitoring Security
+- Real-time threat detection
+- Automated security responses
+- Regular security updates
+
+## License
+Proprietary software. All rights reserved.
+
+## Support
+For technical support: support@azraelnexus.com
