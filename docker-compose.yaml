@@ -68,7 +68,6 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data/pgdata
-      - ./postgres_services/init:/docker-entrypoint-initdb.d
     networks:
       - backend
     healthcheck:
@@ -318,7 +317,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
 
   grafana:
     image: grafana/grafana:latest
